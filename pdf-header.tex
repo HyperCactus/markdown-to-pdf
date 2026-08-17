@@ -1,0 +1,27 @@
+% Syntax-highlighted code
+\usepackage{minted}
+\usemintedstyle{friendly}
+
+% Code background
+\definecolor{codebg}{HTML}{F6F8FA}
+
+\setminted{
+  breaklines=true,
+  breakanywhere=true,
+  breakautoindent=true,
+  fontsize=\small,
+  bgcolor=codebg,
+  frame=single,
+  framesep=2mm,
+  framerule=0.3pt,
+  tabsize=4
+}
+
+% Better line breaking for URLs in normal prose
+\usepackage{xurl}
+
+% Give normal prose a little flexibility before overflowing
+\emergencystretch=3em
+
+% Report any actual horizontal overflow
+\hfuzz=0pt

@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly PROGRAM_NAME="md2pdf"
+readonly PROGRAM_VERSION="0.2.0"
+readonly MIN_PANDOC_VERSION="3.8"
+
+print_help() {
+    cat <<'EOF'
+Usage: md2pdf [OPTIONS] INPUT.md
+
+Convert Markdown to a syntax-highlighted PDF with Pandoc and XeLaTeX.
+
+Options:
+  -o, --output FILE  Write the PDF to FILE (default: beside INPUT.md)
+  -h, --help         Show this help and exit
+  -V, --version      Show version information and exit
+
+Examples:
+  md2pdf report.md
+  md2pdf report.md -o final.pdf
+  md2pdf -o final.pdf "My Report/report.md"
+EOF
+}
+
+die() {
+    printf '%s: error: %s\n' "$PROGRAM_NAME" "$*" >&2
+    exit 1
+}
+
+INPUT=""
+OUTPUT=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o|--output)
+            [[ $# -ge 2 ]] || die "option '$1' requires a file path"
+            [[ -n "$2" ]] || die "output path cannot be empty"
+            OUTPUT="$2"
+            shift 2
+            ;;
+        --output=*)
+            OUTPUT="${1#*=}"
+            [[ -n "$OUTPUT" ]] || die "output path cannot be empty"
+            shift
+            ;;
+        -h|--help)
+            print_help
+            exit 0
+            ;;
+        -V|--version)
+            printf '%s %s\n' "$PROGRAM_NAME" "$PROGRAM_VERSION"
+            exit 0
+            ;;
+        --)
+            shift
+            [[ $# -gt 0 ]] || die "missing input file"
+            [[ -z "$INPUT" ]] || die "only one input file is supported"
+            INPUT="$1"
+            shift
+            [[ $# -eq 0 ]] || die "only one input file is supported"
+            ;;
+        -*)
+            die "unknown option '$1' (try --help)"
+            ;;
+        *)
+            [[ -z "$INPUT" ]] || die "only one input file is supported"
+            INPUT="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$INPUT" ]] || {
+    print_help >&2
+    exit 1
+}
+
+[[ -f "$INPUT" ]] || die "input file not found: $INPUT"
+INPUT="$(realpath "$INPUT")"
+
+INPUT_DIR="$(dirname "$INPUT")"
+INPUT_NAME="$(basename "$INPUT")"
+INPUT_STEM="${INPUT_NAME%.*}"
+
+# Default output: same directory/name as input
+if [[ -z "$OUTPUT" ]]; then
+    OUTPUT="$INPUT_DIR/$INPUT_STEM.pdf"
+else
+    OUTPUT="$(realpath -m "$OUTPUT")"
+fi
+
+[[ "$OUTPUT" != "$INPUT" ]] || die "input and output paths must be different"
+[[ ! -d "$OUTPUT" ]] || die "output path is a directory: $OUTPUT"
+mkdir -p "$(dirname "$OUTPUT")"
+
+# Directory containing this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+HEADER="$SCRIPT_DIR/pdf-header.tex"
+FILTER="$SCRIPT_DIR/minted.lua"
+
+[[ -f "$HEADER" ]] || die "support file not found: $HEADER"
+[[ -f "$FILTER" ]] || die "support file not found: $FILTER"
+
+# Check required programs
+for cmd in pandoc xelatex latexmk pygmentize kpsewhich; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        die "required command '$cmd' was not found on PATH"
+    fi
+done
+
+PANDOC_VERSION="$(pandoc --version | awk 'NR == 1 { print $2; exit }')"
+if [[ -z "$PANDOC_VERSION" ]] ||
+    ! printf '%s\n%s\n' "$MIN_PANDOC_VERSION" "$PANDOC_VERSION" | sort -V -C; then
+    die "Pandoc >= $MIN_PANDOC_VERSION is required (found ${PANDOC_VERSION:-unknown})"
+fi
+
+kpsewhich minted.sty >/dev/null 2>&1 || die "LaTeX package 'minted' is not installed"
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+TEX="$TMPDIR/document.tex"
+PDF="$TMPDIR/document.pdf"
+LOG="$TMPDIR/document.log"
+
+echo "Converting $INPUT_NAME..."
+
+pandoc "$INPUT" \
+    --standalone \
+    --from=markdown \
+    --to=latex \
+    --syntax-highlighting=none \
+    --lua-filter="$FILTER" \
+    --include-in-header="$HEADER" \
+    --resource-path="$INPUT_DIR" \
+    -V papersize=a4 \
+    -V geometry:margin=25mm \
+    -V monofont="DejaVu Sans Mono" \
+    -o "$TEX"
+
+(
+    # minted 2.x writes temporary .pyg files in the current directory. Build
+    # from TMPDIR so those files stay beside the other LaTeX artifacts. Keep
+    # the Markdown directory on TeX's search path for relative images.
+    cd "$TMPDIR"
+    export TEXINPUTS=".:$INPUT_DIR//:${TEXINPUTS:-}"
+
+    latexmk \
+        -gg \
+        -xelatex \
+        -shell-escape \
+        -interaction=nonstopmode \
+        -halt-on-error \
+        document.tex
+)
+
+# Check for layout problems
+if grep -q 'Overfull \\hbox' "$LOG"; then
+    echo "md2pdf: error: content overflow detected:" >&2
+    grep 'Overfull \\hbox' "$LOG" >&2
+    exit 1
+fi
+
+if grep -q 'Missing character:' "$LOG"; then
+    echo "md2pdf: error: missing font characters detected:" >&2
+    grep 'Missing character:' "$LOG" >&2
+    exit 1
+fi
+
+install -m 0644 "$PDF" "$OUTPUT"
+
+echo "Created: $OUTPUT"
