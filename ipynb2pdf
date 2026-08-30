@@ -2,25 +2,28 @@
 
 set -euo pipefail
 
-readonly PROGRAM_NAME="md2pdf"
-readonly PROGRAM_VERSION="0.2.0"
+readonly PROGRAM_NAME="ipynb2pdf"
+readonly PROGRAM_VERSION="0.1.0"
 readonly MIN_PANDOC_VERSION="3.8"
 
 print_help() {
     cat <<'EOF'
-Usage: md2pdf [OPTIONS] INPUT.md
+Usage: ipynb2pdf [OPTIONS] INPUT.ipynb
 
-Convert Markdown to a syntax-highlighted PDF with Pandoc and XeLaTeX.
+Convert a Jupyter notebook to a syntax-highlighted PDF with Pandoc and XeLaTeX.
+
+Markdown, LaTeX math, code cells, and saved cell outputs (including figures)
+are included. Run the notebook first if you want its latest outputs in the PDF.
 
 Options:
-  -o, --output FILE  Write the PDF to FILE (default: beside INPUT.md)
+  -o, --output FILE  Write the PDF to FILE (default: beside INPUT.ipynb)
   -h, --help         Show this help and exit
   -V, --version      Show version information and exit
 
 Examples:
-  md2pdf report.md
-  md2pdf report.md -o final.pdf
-  md2pdf -o final.pdf "My Report/report.md"
+  ipynb2pdf analysis.ipynb
+  ipynb2pdf analysis.ipynb -o report.pdf
+  ipynb2pdf -o report.pdf "My Project/analysis.ipynb"
 EOF
 }
 
@@ -105,13 +108,13 @@ done
 }
 
 [[ -f "$INPUT" ]] || die "input file not found: $INPUT"
+[[ "${INPUT,,}" == *.ipynb ]] || die "input file must have an .ipynb extension: $INPUT"
 INPUT="$(realpath "$INPUT")"
 
 INPUT_DIR="$(dirname "$INPUT")"
 INPUT_NAME="$(basename "$INPUT")"
 INPUT_STEM="${INPUT_NAME%.*}"
 
-# Default output: same directory/name as input
 if [[ -z "$OUTPUT" ]]; then
     OUTPUT="$INPUT_DIR/$INPUT_STEM.pdf"
 else
@@ -122,21 +125,16 @@ fi
 [[ ! -d "$OUTPUT" ]] || die "output path is a directory: $OUTPUT"
 mkdir -p "$(dirname "$OUTPUT")"
 
-# Directory containing this script
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
-
 HEADER="$SCRIPT_DIR/pdf-header.tex"
 FILTER="$SCRIPT_DIR/minted.lua"
 
 [[ -f "$HEADER" ]] || die "support file not found: $HEADER"
 [[ -f "$FILTER" ]] || die "support file not found: $FILTER"
 
-# Check required programs
 for cmd in pandoc xelatex latexmk pygmentize kpsewhich; do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-        die "required command '$cmd' was not found on PATH"
-    fi
+    command -v "$cmd" >/dev/null 2>&1 || die "required command '$cmd' was not found on PATH"
 done
 
 PANDOC_VERSION="$(pandoc --version | awk 'NR == 1 { print $2; exit }')"
@@ -153,15 +151,17 @@ trap 'rm -rf "$TMPDIR"' EXIT
 TEX="$TMPDIR/document.tex"
 PDF="$TMPDIR/document.pdf"
 LOG="$TMPDIR/document.log"
+MEDIA_DIR="$TMPDIR/media"
 PANDOC_LOG="$TMPDIR/pandoc.log"
 BUILD_LOG="$TMPDIR/build.log"
 
-show_progress 10 "Reading input"
+show_progress 10 "Reading notebook"
 
 if ! pandoc "$INPUT" \
     --standalone \
-    --from=markdown \
+    --from=ipynb+raw_tex \
     --to=latex \
+    --extract-media="$MEDIA_DIR" \
     --syntax-highlighting=none \
     --lua-filter="$FILTER" \
     --include-in-header="$HEADER" \
@@ -170,18 +170,14 @@ if ! pandoc "$INPUT" \
     -V geometry:margin=25mm \
     -V monofont="DejaVu Sans Mono" \
     -o "$TEX" >"$PANDOC_LOG" 2>&1; then
-    conversion_failed "document preparation" "$PANDOC_LOG"
+    conversion_failed "notebook preparation" "$PANDOC_LOG"
 fi
 
 show_progress 45 "Typesetting PDF"
 
 if ! (
-    # minted 2.x writes temporary .pyg files in the current directory. Build
-    # from TMPDIR so those files stay beside the other LaTeX artifacts. Keep
-    # the Markdown directory on TeX's search path for relative images.
     cd "$TMPDIR"
     export TEXINPUTS=".:$INPUT_DIR//:${TEXINPUTS:-}"
-
     latexmk \
         -gg \
         -xelatex \
@@ -195,23 +191,21 @@ fi
 
 show_progress 90 "Checking output"
 
-# Check for layout problems
 if grep -q 'Overfull \\hbox' "$LOG"; then
     [[ -t 1 ]] && printf '\n' >&2
-    echo "md2pdf: error: content overflow detected:" >&2
+    printf '%s: error: content overflow detected:\n' "$PROGRAM_NAME" >&2
     grep 'Overfull \\hbox' "$LOG" >&2
     exit 1
 fi
 
 if grep -q 'Missing character:' "$LOG"; then
     [[ -t 1 ]] && printf '\n' >&2
-    echo "md2pdf: error: missing font characters detected:" >&2
+    printf '%s: error: missing font characters detected:\n' "$PROGRAM_NAME" >&2
     grep 'Missing character:' "$LOG" >&2
     exit 1
 fi
 
 install -m 0644 "$PDF" "$OUTPUT"
-
 show_progress 100 "Complete"
 [[ -t 1 ]] && printf '\n'
 printf '%s generated\n' "$OUTPUT"

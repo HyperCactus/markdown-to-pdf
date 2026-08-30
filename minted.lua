@@ -98,6 +98,47 @@ local minted_default_inline_language = "text"
 local minted_block_attributes        = {}
 local minted_inline_attributes       = {}
 
+-- Pygments can apply italic or bold after XeTeX selects a Unicode fallback.
+-- Escape mathematical alphabets back to LaTeX so the fallback font wins over
+-- the surrounding token style (for example, a mathematical lambda in a
+-- Python comment).
+local function escape_unicode_math(text, attributes)
+  local marker = nil
+  for _, candidate in ipairs{"@", "|", "!", "+", "="} do
+    if not text:find(candidate, 1, true) then
+      marker = candidate
+      break
+    end
+  end
+
+  if marker == nil then
+    return text, attributes
+  end
+
+  local changed = false
+  local escaped = text:gsub("[\194-\244][\128-\191]*", function(char)
+    local codepoint = utf8.codepoint(char)
+    if (codepoint >= 0x1D400 and codepoint <= 0x1D7FF)
+        or (codepoint >= 0x1EE00 and codepoint <= 0x1EEFF) then
+      changed = true
+      return string.format(
+        "%s{\\unicodeMathFallback\\symbol{\"%X}}%s",
+        marker,
+        codepoint,
+        marker
+      )
+    end
+    return char
+  end)
+
+  if changed then
+    local option = "escapeinside=" .. marker .. marker
+    attributes = attributes == "" and option or attributes .. "," .. option
+  end
+
+  return escaped, attributes
+end
+
 --------------------------------------------------------------------------------
 -- Constants used to differentiate Code and CodeBlock elements.               --
 --------------------------------------------------------------------------------
@@ -260,6 +301,26 @@ local function remove_minted_attibutes(elem)
   return elem
 end
 
+-- Notebook output blocks are MIME bundles.  CodeBlock alternatives such as a
+-- Matplotlib figure's text/plain representation must not be converted to raw
+-- minted LaTeX: doing so makes Pandoc prefer the placeholder text over the
+-- richer image/png alternative.  Mark every code block nested in an output
+-- container before the main CodeBlock pass runs.
+local function preserve_notebook_output(div)
+  if not div.classes:includes("output") then
+    return nil
+  end
+
+  return div:walk{
+    CodeBlock = function(block)
+      if not block.classes:includes("no_minted") then
+        block.classes:insert("no_minted")
+      end
+      return block
+    end
+  }
+end
+
 -- Return a `start_delim` and `end_delim` that can safely wrap around the
 -- specified `text` when used inline. If no special characters occur in `text`,
 -- then a pair of braces are returned. Otherwise, if any character of
@@ -382,12 +443,14 @@ function Code(elem)
     local start_delim, end_delim = minted_inline_delims(elem.text)
     local language   = minted_language(elem, MintedInline)
     local attributes = minted_attributes(elem, MintedInline)
+    local escaped_text
+    escaped_text, attributes = escape_unicode_math(elem.text, attributes)
     local raw_minted = string.format(
       "\\mintinline[%s]{%s}%s%s%s",
       attributes,
       language,
       start_delim,
-      elem.text,
+      escaped_text,
       end_delim
     )
     -- NOTE: prior to pandoc commit 24a0d61, `beamer` cannot be used as the
@@ -402,13 +465,19 @@ end
 -- writers.  Other writers have all minted attributes removed.
 function CodeBlock(block)
   if FORMAT == "beamer" or FORMAT == "latex" then
+    if block.classes:includes("no_minted") then
+      return remove_minted_attibutes(block)
+    end
+
     local language   = minted_language(block, MintedBlock)
     local attributes = minted_attributes(block, MintedBlock)
+    local escaped_text
+    escaped_text, attributes = escape_unicode_math(block.text, attributes)
     local raw_minted = string.format(
       "\\begin{minted}[%s]{%s}\n%s\n\\end{minted}",
       attributes,
       language,
-      block.text
+      escaped_text
     )
     -- NOTE: prior to pandoc commit 24a0d61, `beamer` cannot be used as the
     -- RawBlock format.  Using `latex` should not cause any problems.
@@ -448,6 +517,7 @@ end
 -- from the document will not be loaded _first_.
 return {
   {Meta = Meta},
+  {Div = preserve_notebook_output},
   {Code = Code},
   {CodeBlock = CodeBlock},
   {Header = Header}

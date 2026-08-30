@@ -20,8 +20,24 @@
 % Better line breaking for URLs in normal prose
 \usepackage{xurl}
 
+% DejaVu Sans Mono does not contain Unicode mathematical alphanumeric
+% characters such as 𝜆 (U+1D706), which commonly appear in notebook code.
+% Switch only Unicode mathematics blocks to a broad-coverage fallback font;
+% ordinary code remains monospaced.
+\usepackage[Mathematics]{ucharclasses}
+% Noto Sans Math has one face. Map every requested code-token shape to that
+% face so Pygments styles (notably italic comments) cannot switch the symbol
+% back to an incomplete mono font.
+\newfontfamily\unicodeMathFallback{Noto Sans Math}[
+  BoldFont={Noto Sans Math},
+  ItalicFont={Noto Sans Math},
+  BoldItalicFont={Noto Sans Math}
+]
+\setTransitionsForMathematics{\begingroup\unicodeMathFallback}{\endgroup}
+
 % Give normal prose a little flexibility before overflowing
 \emergencystretch=3em
 
-% Report any actual horizontal overflow
-\hfuzz=0pt
+% Ignore sub-pixel rounding at image boundaries while still reporting real
+% horizontal overflow.
+\hfuzz=0.1pt
