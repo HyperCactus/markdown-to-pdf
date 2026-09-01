@@ -139,6 +139,67 @@ local function escape_unicode_math(text, attributes)
   return escaped, attributes
 end
 
+-- MathJax accepts some display-math environments directly in notebook
+-- Markdown, while XeLaTeX requires math-only environments such as array to be
+-- inside math mode.  Normalize those blocks and constrain long, unnumbered
+-- align displays to the printable width without enlarging shorter formulas.
+local function adjusted_align(text)
+  local content = text
+    :gsub("^\\begin{align%*}%s*", "")
+    :gsub("%s*\\end{align%*}%s*$", "")
+  return table.concat({
+    "\\[",
+    "\\adjustbox{max width=\\linewidth}{$\\displaystyle\\begin{aligned}",
+    content,
+    "\\end{aligned}$}",
+    "\\]"
+  }, "\n")
+end
+
+local function is_tex_format(format)
+  return format == "tex" or format == "latex"
+end
+
+local function normalize_latex_math(block)
+  if FORMAT ~= "latex" and FORMAT ~= "beamer" then
+    return nil
+  end
+
+  if not is_tex_format(block.format) then
+    return nil
+  end
+
+  if block.text:match("^\\begin{array}") then
+    return pandoc.RawBlock("latex", "\\[\n" .. block.text .. "\n\\]")
+  end
+
+  if block.text:match("^\\begin{align%*}") then
+    return pandoc.RawBlock("latex", adjusted_align(block.text))
+  end
+
+  return nil
+end
+
+local function normalize_latex_math_inline(inline)
+  if FORMAT ~= "latex" and FORMAT ~= "beamer" then
+    return nil
+  end
+
+  if not is_tex_format(inline.format) then
+    return nil
+  end
+
+  if inline.text:match("^\\begin{array}") then
+    return pandoc.RawInline("latex", "\\[\n" .. inline.text .. "\n\\]")
+  end
+
+  if inline.text:match("^\\begin{align%*}") then
+    return pandoc.RawInline("latex", adjusted_align(inline.text))
+  end
+
+  return nil
+end
+
 --------------------------------------------------------------------------------
 -- Constants used to differentiate Code and CodeBlock elements.               --
 --------------------------------------------------------------------------------
@@ -517,6 +578,7 @@ end
 -- from the document will not be loaded _first_.
 return {
   {Meta = Meta},
+  {RawBlock = normalize_latex_math, RawInline = normalize_latex_math_inline},
   {Div = preserve_notebook_output},
   {Code = Code},
   {CodeBlock = CodeBlock},

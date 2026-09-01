@@ -52,7 +52,12 @@ conversion_failed() {
     local details="$2"
     [[ -t 1 ]] && printf '\n' >&2
     printf '%s: error: %s failed\n' "$PROGRAM_NAME" "$stage" >&2
-    tail -n 20 "$details" >&2
+    if grep -q '^!' "$details"; then
+        awk '/^!/ { show=5 } show > 0 { print; show-- }' "$details" |
+            head -n 5 >&2
+    else
+        tail -n 20 "$details" >&2
+    fi
     exit 1
 }
 
