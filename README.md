@@ -115,9 +115,9 @@ embedded figures are rendered. The script does not execute notebooks; only
 outputs already saved in the `.ipynb` file are included.
 
 LaTeX environments in Markdown cells (such as `align` and `align*`) are
-supported. Standalone math-only environments such as `array` are placed in
-display math automatically, and oversized `align*` blocks are scaled down to
-the printable width. When a cell output contains multiple MIME
+supported. Standalone math-only environments such as `array`, `matrix`, and
+the AMS matrix variants are placed in display math automatically. Oversized
+math blocks are scaled down to the printable width. When a cell output contains multiple MIME
 representations, the richest supported representation is used, so saved plots
 render as figures instead of their plain-text descriptions.
 

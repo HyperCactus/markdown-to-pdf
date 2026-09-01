@@ -156,6 +156,37 @@ local function adjusted_align(text)
   }, "\n")
 end
 
+local math_only_environments = {
+  array = true,
+  matrix = true,
+  pmatrix = true,
+  bmatrix = true,
+  Bmatrix = true,
+  vmatrix = true,
+  Vmatrix = true,
+  smallmatrix = true,
+  cases = true,
+  aligned = true,
+  alignedat = true,
+  gathered = true,
+  split = true
+}
+
+local function standalone_math(text)
+  local environment = text:match("^\\begin{([%a]+)}")
+  if environment == nil or not math_only_environments[environment] then
+    return nil
+  end
+
+  return table.concat({
+    "\\[",
+    "\\adjustbox{max width=\\linewidth}{$\\displaystyle",
+    text,
+    "$}",
+    "\\]"
+  }, "\n")
+end
+
 local function is_tex_format(format)
   return format == "tex" or format == "latex"
 end
@@ -169,8 +200,9 @@ local function normalize_latex_math(block)
     return nil
   end
 
-  if block.text:match("^\\begin{array}") then
-    return pandoc.RawBlock("latex", "\\[\n" .. block.text .. "\n\\]")
+  local normalized = standalone_math(block.text)
+  if normalized ~= nil then
+    return pandoc.RawBlock("latex", normalized)
   end
 
   if block.text:match("^\\begin{align%*}") then
@@ -189,8 +221,9 @@ local function normalize_latex_math_inline(inline)
     return nil
   end
 
-  if inline.text:match("^\\begin{array}") then
-    return pandoc.RawInline("latex", "\\[\n" .. inline.text .. "\n\\]")
+  local normalized = standalone_math(inline.text)
+  if normalized ~= nil then
+    return pandoc.RawInline("latex", normalized)
   end
 
   if inline.text:match("^\\begin{align%*}") then
