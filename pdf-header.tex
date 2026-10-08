@@ -17,6 +17,17 @@
   tabsize=4
 }
 
+% A minted inline background uses an unbreakable colorbox. Keep inline code
+% breakable within prose, while retaining the background on fenced code.
+\setmintedinline{bgcolor={}}
+
+% Pandoc leaves notebook text outputs as verbatim to preserve richer MIME
+% alternatives such as figures. Allow those plain-text blocks to wrap too.
+\DefineVerbatimEnvironment{verbatim}{Verbatim}{
+  breaklines=true,
+  breakanywhere=true
+}
+
 % Better line breaking for URLs in normal prose
 \usepackage{xurl}
 

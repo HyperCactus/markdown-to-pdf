@@ -114,6 +114,10 @@ Notebook markdown, math, syntax-highlighted code cells, text output, and
 embedded figures are rendered. The script does not execute notebooks; only
 outputs already saved in the `.ipynb` file are included.
 
+Long inline code and saved plain-text outputs wrap to fit the page. Inline
+code has no background fill so LaTeX can break it across lines; fenced code
+blocks keep their background and frame.
+
 LaTeX environments in Markdown cells (such as `align` and `align*`) are
 supported. Standalone math-only environments such as `array`, `matrix`, and
 the AMS matrix variants are placed in display math automatically. Oversized
@@ -170,6 +174,15 @@ git pull
 ```
 
 The `md2pdf` symlink will continue to use the updated script.
+
+## Tests
+
+With the conversion dependencies above, Python 3, and `pdftotext` (from
+`poppler-utils`) installed, run the wrapping regression tests:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## License
 
