@@ -98,6 +98,61 @@ local minted_default_inline_language = "text"
 local minted_block_attributes        = {}
 local minted_inline_attributes       = {}
 
+-- Validate against the installed Pygments, rather than a fixed list that goes
+-- stale. Unknown notebook kernels and fence labels should still print as code.
+local lexer_names = nil
+local warned_languages = {}
+local function supported_language(language)
+  if lexer_names == nil then
+    lexer_names = {text = true}
+    local ok, listing = pcall(pandoc.pipe, "pygmentize", {"-L", "lexers"}, "")
+    if not ok then
+      error("Unable to list Pygments lexers: " .. tostring(listing))
+    end
+    for aliases in listing:gmatch("\n%* ([^\n]*):") do
+      for alias in aliases:gmatch("[^,%s]+") do
+        lexer_names[alias] = true
+      end
+    end
+  end
+  if lexer_names[language] then
+    return language
+  end
+  if not warned_languages[language] then
+    io.stderr:write("pdf: warning: unknown code language " .. string.format("%q", language)
+      .. "; rendering as plain text\n")
+    warned_languages[language] = true
+  end
+  return "text"
+end
+
+-- A prose escape such as '\n' is parsed as raw TeX by Pandoc. Some escapes
+-- even coincide with accent commands (\t, \r, \b, \v, \u), which can consume
+-- the closing quote. Preserve these as text unless they have a braced or
+-- whitespace-separated argument. Math and explicit TeX blocks are untouched.
+local function protect_prose_tex(inline)
+  if (FORMAT ~= "latex" and FORMAT ~= "beamer")
+      or (inline.format ~= "tex" and inline.format ~= "latex") then
+    return nil
+  end
+  local command = inline.text:match("^\\([nrtbfva])[^%a%s{]*$")
+  if command or inline.text:match("^\\[xuU]%x*$") then
+    return pandoc.Str(inline.text)
+  end
+
+  -- Preserve existing commands (including user-defined macros). Render an
+  -- undefined standalone control word literally instead of aborting the PDF.
+  -- Leave conditionals and commands with arguments to TeX: wrapping those
+  -- could change their grouping or hide genuinely broken mathematics.
+  local name = inline.text:match("^\\([%a]+)$")
+  if name and not name:match("^if") and name ~= "else" and name ~= "fi"
+      and name ~= "or" and name ~= "csname" and name ~= "endcsname" then
+    return pandoc.RawInline("latex", "\\ifcsname " .. name .. "\\endcsname"
+      .. inline.text .. "\\else\\textbackslash{}" .. name .. "\\fi{}")
+  end
+  return nil
+end
+
 -- Pygments can apply italic or bold after XeTeX selects a Unicode fallback.
 -- Escape mathematical alphabets back to LaTeX so the fallback font wins over
 -- the surrounding token style (for example, a mathematical lambda in a
@@ -250,15 +305,15 @@ local function minted_language(elem, kind)
   -- If the code [block] attached classes, we assume the first one is the
   -- lexer class to use.
   if #elem.classes > 0 then
-    return elem.classes[1]
+    return supported_language(elem.classes[1])
   end
   -- Allow user-level metadata to override the inline language.
   if kind == MintedInline then
-    return minted_default_inline_language
+    return supported_language(minted_default_inline_language)
   end
   -- Allow user-level metadata to override the block language.
   if kind == MintedBlock then
-    return minted_default_block_language
+    return supported_language(minted_default_block_language)
   end
 
   -- Failsafe, should not hit here unless function called incorrectly.
@@ -436,8 +491,7 @@ local function minted_inline_delims(text)
       end
     end
     if not start_delim then
-      local msg = 'Unable to determine delimiter to use around inline code %q'
-      error(msg:format(text))
+      return nil, nil
     end
   else
     start_delim = '{'
@@ -534,11 +588,25 @@ function Code(elem)
       return nil -- Return `nil` signals to `pandoc` that elem is not changed.
     end
 
-    local start_delim, end_delim = minted_inline_delims(elem.text)
     local language   = minted_language(elem, MintedInline)
     local attributes = minted_attributes(elem, MintedInline)
     local escaped_text
     escaped_text, attributes = escape_unicode_math(elem.text, attributes)
+    -- Choose the delimiter after inserting Unicode escapes, which introduce
+    -- braces and may themselves contain a candidate delimiter.
+    local start_delim, end_delim = minted_inline_delims(escaped_text)
+    if start_delim == nil then
+      -- Split a pathological span at a character boundary. Both halves are
+      -- still inline code and fvextra retains its normal wrapping behavior.
+      local boundary = utf8.offset(elem.text, 2)
+      if boundary then
+        return pandoc.Inlines{
+          pandoc.Code(elem.text:sub(1, boundary - 1), elem.attr),
+          pandoc.Code(elem.text:sub(boundary), elem.attr)
+        }:walk{Code = Code}
+      end
+      return nil
+    end
     local raw_minted = string.format(
       "\\mintinline[%s]{%s}%s%s%s",
       attributes,
@@ -611,6 +679,7 @@ end
 -- from the document will not be loaded _first_.
 return {
   {Meta = Meta},
+  {RawInline = protect_prose_tex},
   {RawBlock = normalize_latex_math, RawInline = normalize_latex_math_inline},
   {Div = preserve_notebook_output},
   {Code = Code},

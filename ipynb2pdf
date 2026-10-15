@@ -3,7 +3,7 @@
 set -euo pipefail
 
 readonly PROGRAM_NAME="ipynb2pdf"
-readonly PROGRAM_VERSION="0.1.0"
+readonly PROGRAM_VERSION="0.2.0"
 readonly MIN_PANDOC_VERSION="3.8"
 
 print_help() {
@@ -17,6 +17,8 @@ are included. Run the notebook first if you want its latest outputs in the PDF.
 
 Options:
   -o, --output FILE  Write the PDF to FILE (default: beside INPUT.ipynb)
+  --keep-build       Keep generated TeX, media, and build logs
+  --strict           Fail on overflow or missing font characters
   -h, --help         Show this help and exit
   -V, --version      Show version information and exit
 
@@ -50,22 +52,10 @@ show_progress() {
     fi
 }
 
-conversion_failed() {
-    local stage="$1"
-    local details="$2"
-    [[ -t 1 ]] && printf '\n' >&2
-    printf '%s: error: %s failed\n' "$PROGRAM_NAME" "$stage" >&2
-    if grep -q '^!' "$details"; then
-        awk '/^!/ { show=5 } show > 0 { print; show-- }' "$details" |
-            head -n 5 >&2
-    else
-        tail -n 20 "$details" >&2
-    fi
-    exit 1
-}
-
 INPUT=""
 OUTPUT=""
+KEEP_BUILD=false
+STRICT=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -78,6 +68,14 @@ while [[ $# -gt 0 ]]; do
         --output=*)
             OUTPUT="${1#*=}"
             [[ -n "$OUTPUT" ]] || die "output path cannot be empty"
+            shift
+            ;;
+        --keep-build)
+            KEEP_BUILD=true
+            shift
+            ;;
+        --strict)
+            STRICT=true
             shift
             ;;
         -h|--help)
@@ -134,6 +132,9 @@ SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 HEADER="$SCRIPT_DIR/pdf-header.tex"
 FILTER="$SCRIPT_DIR/minted.lua"
+COMMON="$SCRIPT_DIR/pdf-common.sh"
+[[ -f "$COMMON" ]] || die "support file not found: $COMMON"
+source "$COMMON"
 
 [[ -f "$HEADER" ]] || die "support file not found: $HEADER"
 [[ -f "$FILTER" ]] || die "support file not found: $FILTER"
@@ -150,15 +151,15 @@ fi
 
 kpsewhich minted.sty >/dev/null 2>&1 || die "LaTeX package 'minted' is not installed"
 
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+BUILD_DIR="$(mktemp -d)"
+trap cleanup_build EXIT
 
-TEX="$TMPDIR/document.tex"
-PDF="$TMPDIR/document.pdf"
-LOG="$TMPDIR/document.log"
-MEDIA_DIR="$TMPDIR/media"
-PANDOC_LOG="$TMPDIR/pandoc.log"
-BUILD_LOG="$TMPDIR/build.log"
+TEX="$BUILD_DIR/document.tex"
+PDF="$BUILD_DIR/document.pdf"
+LOG="$BUILD_DIR/document.log"
+MEDIA_DIR="$BUILD_DIR/media"
+PANDOC_LOG="$BUILD_DIR/pandoc.log"
+BUILD_LOG="$BUILD_DIR/build.log"
 
 show_progress 10 "Reading notebook"
 
@@ -172,16 +173,21 @@ if ! pandoc "$INPUT" \
     --include-in-header="$HEADER" \
     --resource-path="$INPUT_DIR" \
     -V papersize=a4 \
-    -V geometry:margin=25mm \
+    -V geometry:margin=14mm \
     -V monofont="DejaVu Sans Mono" \
     -o "$TEX" >"$PANDOC_LOG" 2>&1; then
     conversion_failed "notebook preparation" "$PANDOC_LOG"
 fi
 
+if [[ -s "$PANDOC_LOG" ]]; then
+    [[ -t 1 ]] && printf '\n' >&2
+    cat "$PANDOC_LOG" >&2
+fi
+
 show_progress 45 "Typesetting PDF"
 
 if ! (
-    cd "$TMPDIR"
+    cd "$BUILD_DIR"
     export TEXINPUTS=".:$INPUT_DIR//:${TEXINPUTS:-}"
     latexmk \
         -gg \
@@ -189,6 +195,7 @@ if ! (
         -shell-escape \
         -interaction=nonstopmode \
         -halt-on-error \
+        -file-line-error \
         document.tex
 ) >"$BUILD_LOG" 2>&1; then
     conversion_failed "PDF typesetting" "$BUILD_LOG"
@@ -196,19 +203,7 @@ fi
 
 show_progress 90 "Checking output"
 
-if grep -q 'Overfull \\hbox' "$LOG"; then
-    [[ -t 1 ]] && printf '\n' >&2
-    printf '%s: error: content overflow detected:\n' "$PROGRAM_NAME" >&2
-    grep 'Overfull \\hbox' "$LOG" >&2
-    exit 1
-fi
-
-if grep -q 'Missing character:' "$LOG"; then
-    [[ -t 1 ]] && printf '\n' >&2
-    printf '%s: error: missing font characters detected:\n' "$PROGRAM_NAME" >&2
-    grep 'Missing character:' "$LOG" >&2
-    exit 1
-fi
+check_pdf
 
 install -m 0644 "$PDF" "$OUTPUT"
 show_progress 100 "Complete"

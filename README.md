@@ -19,7 +19,9 @@ For notebooks, saved code-cell outputs and figures are included as well. Run
 the notebook before converting it if you want the PDF to contain current
 results.
 
-Build files are kept in a temporary directory and removed automatically.
+Build files are kept in a temporary directory and removed after a clean build.
+Failed builds and builds with quality warnings retain their TeX and logs, and
+print the directory path. Use `--keep-build` to retain a successful build too.
 Conversion progress is shown as a compact progress bar; detailed Pandoc and
 LaTeX output is displayed only when a conversion stage fails.
 
@@ -128,6 +130,15 @@ render as figures instead of their plain-text descriptions.
 Unicode mathematical characters in code cells are rendered automatically
 using Noto Sans Math as a fallback font.
 
+Common programming escapes in prose, such as `'\n'` and `'\t'`, are printed
+literally. Undefined standalone TeX commands in prose (for example, segments
+of Windows paths) also print literally. Math, commands with arguments, and
+explicit TeX blocks continue to be typeset as LaTeX. Use backticks for literal
+code and paths whenever possible to avoid ambiguity with valid TeX commands.
+
+Unknown code language labels fall back to plain-text highlighting with a
+warning, preserving the code content.
+
 ## Markdown examples
 
 Use standard Markdown image paths relative to the input file:
@@ -166,6 +177,27 @@ kpsewhich minted.sty
 
 Each command should print a version or file path. If one fails, install the corresponding dependency listed above.
 
+Overflow and missing font characters produce visible warnings while still
+writing the PDF. Review those warnings: overflow may clip content, and missing
+characters need a font containing those glyphs. To reject PDFs with either
+problem, use strict mode (available in both converters):
+
+```bash
+ipynb2pdf analysis.ipynb --strict
+md2pdf report.md --strict
+```
+
+For a failed conversion, the error includes the full log path and the retained
+build directory. That directory contains `document.tex`, `pandoc.log`, and
+`build.log`, plus any LaTeX logs and extracted media generated before failure.
+Real TeX errors, invalid notebooks, and missing dependencies still cause
+conversion to fail; arbitrary malformed input cannot always produce a valid
+PDF. To inspect a successful build:
+
+```bash
+ipynb2pdf analysis.ipynb --keep-build
+```
+
 ## Update
 
 ```bash
@@ -178,7 +210,7 @@ The `md2pdf` symlink will continue to use the updated script.
 ## Tests
 
 With the conversion dependencies above, Python 3, and `pdftotext` (from
-`poppler-utils`) installed, run the wrapping regression tests:
+`poppler-utils`) installed, run the conversion regression tests:
 
 ```bash
 python3 -m unittest discover -s tests -v
